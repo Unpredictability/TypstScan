@@ -55,9 +55,9 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "tex2typst-rs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66ae5cfa07e7f17719b5c431d08ca2dd5177ebb62e4fd51e7772b13f01db2235"
+checksum = "56c26c8137bfe94380528b96a2a753d2a041348ecb9fd991d6b0c2a6e29c74ad"
 dependencies = [
  "regex",
 ]
