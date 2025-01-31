@@ -1,8 +1,37 @@
-use tex2typst_rs::tex2typst;
+use std::sync::Arc;
+use eframe::{egui, run_native, App};
+use eframe::egui::mutex::Mutex;
 
-fn main() {
-    let tex1 = "i_D = \\mu_n C_\\text{ox} \\frac{W}{L} \\left[ (v_\\text{GS} - V_t)v_\\text{DS} - \\frac{1}{2} v_\\text{DS}^2 \\right]";
-    let tex2 = "\\iint_{\\Sigma} \\operatorname{curl}(\\vec{F}) \\cdot \\mathrm{d}\\vec{S} = \\oint_{\\partial \\Sigma} \\vec{F} \\times \\mathrm{d}\\vec{l}";
-    println!("{}", tex2typst(tex1));
-    println!("{}", tex2typst(tex2));
+mod app;
+
+use app::TypstScan;
+use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
+
+fn main() -> eframe::Result {
+    // create a shared state for hotkey callback and the eframe app
+    let shared_flag = Arc::new(Mutex::new(false));
+    // Create a new hotkey hook
+    let hook = Hook::new().expect("Failed to create hotkey hook");
+
+    // Define the hotkey: Command + Shift + S
+    let hotkey = Hotkey {
+        key_code: KeyCode::KeyZ,
+        modifiers: Modifiers::CONTROL | Modifiers::ALT,
+    };
+
+    // Register the hotkey with its associated action
+    let shared_flag_clone = shared_flag.clone();
+    hook.register(hotkey, move || {
+        println!("Hotkey pressed!");
+        let mut shared_flag = shared_flag_clone.lock();
+        *shared_flag = !*shared_flag;
+    }).expect("Failed to register hotkey");
+
+    // Run the event loop to listen for hotkey events
+    // hook.run().expect("Failed to run hotkey hook");
+
+
+    let mut native_options = eframe::NativeOptions::default();
+    native_options.viewport.transparent = Some(true);
+    run_native("Typst Scan", native_options, Box::new(|cc| Ok(Box::new(TypstScan::new(cc, shared_flag)))))
 }
