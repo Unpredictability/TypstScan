@@ -1,10 +1,9 @@
 use eframe::egui::mutex::Mutex;
-use eframe::egui::{Color32, Image, Pos2, Stroke, UserData, ViewportCommand, Widget};
+use eframe::egui::Widget;
 use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
 use image::buffer::ConvertBuffer;
-use image::{DynamicImage, ImageFormat, RgbImage, Rgba, RgbaImage};
 use mouse_position;
 use reqwest::blocking::multipart;
 use reqwest::blocking::multipart::Part;
@@ -12,7 +11,8 @@ use reqwest::blocking::Client;
 use reqwest::header;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use tex2typst_rs::text_and_tex2typst;
 use uuid::Uuid;
@@ -27,15 +27,6 @@ pub struct TypstScanData {
     selected_snip_item: Option<Uuid>,
 }
 
-pub struct TypstScan {
-    data: TypstScanData,
-    overlay: Arc<Mutex<bool>>,
-    screenshot_start: Option<(i32, i32)>,
-    screenshot_end: Option<(i32, i32)>,
-    result_queue: Arc<Mutex<Vec<MathpixResult>>>,
-    image: Option<(Arc<egui::ColorImage>, egui::TextureHandle)>,
-}
-
 impl Default for TypstScanData {
     fn default() -> Self {
         Self {
@@ -48,27 +39,114 @@ impl Default for TypstScanData {
     }
 }
 
+pub struct TypstScan {
+    data: TypstScanData,
+    hotkey_flag: Arc<Mutex<bool>>,
+    screenshot_start: Option<(i32, i32)>,
+    screenshot_end: Option<(i32, i32)>,
+    result_queue: Arc<Mutex<Vec<MathpixResult>>>,
+    worker_thread: Option<thread::JoinHandle<()>>,
+    task_sender: Sender<SnipTask>,
+    result_receiver: Receiver<TaskResult>,
+}
+
 impl TypstScan {
     pub fn new(cc: &eframe::CreationContext<'_>, shared_flag: Arc<Mutex<bool>>) -> Self {
-        if let Some(storage) = cc.storage {
-            let typst_scan_data: TypstScanData = eframe::get_value(storage, "typst_scan_data").unwrap_or_default();
-            return Self {
-                data: typst_scan_data,
-                overlay: shared_flag,
-                screenshot_start: None,
-                screenshot_end: None,
-                result_queue: Arc::new(Mutex::new(Vec::new())),
-                image: None,
-            };
-        }
+        let typst_scan_data = if let Some(storage) = cc.storage {
+            eframe::get_value(storage, "typst_scan_data").unwrap_or_default()
+        } else {
+            TypstScanData::default()
+        };
+
+        let (task_sender, task_receiver) = mpsc::channel::<SnipTask>();
+        let (result_sender, result_receiver) = mpsc::channel::<TaskResult>();
+        let worker_thread = thread::spawn(move || {
+            // Options payload (similar to the Swift `options` dictionary)
+            let options_payload = json!({
+                "config": {
+                    "include_diagrams": true,
+                    "idiomatic_eqn_arrays": true,
+                    "math_display_delimiters": ["\n\\[\n", "\n\\]\n"],
+                    "ocr_version": 2,
+                    "mmd_version": "1.3.0",
+                    "math_inline_delimiters": ["\\(", "\\)"],
+                    "rm_fonts": false
+                },
+                "metadata": {
+                    "version": "3.4.11",
+                    "platform": "macOS 15.2.0",
+                    "count": 6,
+                    "input_type": "crop"
+                }
+            });
+            let client = Client::builder()
+                .pool_idle_timeout(None)
+                .build()
+                .expect("Failed to create reqwest client");
+
+            for snip_task in task_receiver {
+                let mut headers = header::HeaderMap::new();
+                headers.insert(
+                    "Authorization",
+                    header::HeaderValue::from_str(&format!("Bearer {}", snip_task.api_key)).unwrap(),
+                );
+                headers.insert("Accept", header::HeaderValue::from_static("*/*"));
+                headers.insert(
+                    "User-Agent",
+                    header::HeaderValue::from_static("Mathpix Snip MacOS App v3.4.11(3411.2)"),
+                );
+
+                let screenshot_data = std::fs::read(snip_task.screenshot_path).expect("Failed to read screenshot file");
+
+                let form = multipart::Form::new()
+                    .part(
+                        "file",
+                        Part::bytes(screenshot_data).file_name("image.png").mime_str("image/png").unwrap(),
+                    )
+                    .part(
+                        "options_json",
+                        Part::text(options_payload.to_string()).mime_str("application/json").unwrap(),
+                    );
+
+                let response = client
+                    .post("https://snip-api.mathpix.com/v1/snips-multipart")
+                    .headers(headers.clone())
+                    .multipart(form)
+                    .send()
+                    .unwrap();
+
+                match response.json::<MathpixResult>() {
+                    Ok(mathpix_result) => {
+                        result_sender
+                            .send(TaskResult {
+                                id: snip_task.id,
+                                original_image: mathpix_result.images.original.fullsize.url.clone(),
+                                rendered_image: mathpix_result.images.rendered.fullsize.url.clone(),
+                                text: mathpix_result.text.clone(),
+                                latex: mathpix_result.latex.clone(),
+                                typst: text_and_tex2typst(&mathpix_result.text),
+                                title: mathpix_result.title.clone(),
+                                snip_count: mathpix_result.snip_count,
+                                snip_limit: mathpix_result.snip_limit,
+                            })
+                            .unwrap();
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {:?}", e);
+                    }
+                }
+            }
+        });
 
         Self {
-            data: TypstScanData::default(),
-            overlay: shared_flag,
+            data: typst_scan_data,
+            hotkey_flag: shared_flag,
             screenshot_start: None,
             screenshot_end: None,
             result_queue: Arc::new(Mutex::new(Vec::new())),
-            image: None,
+            worker_thread: Some(worker_thread),
+            task_sender,
+            result_receiver,
         }
     }
 }
@@ -91,21 +169,6 @@ impl App for TypstScan {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // for showing images
         egui_extras::install_image_loaders(ctx);
-
-        // check if there is any new result
-        let mut result_queue = self.result_queue.lock();
-        if !result_queue.is_empty() {
-            let result = result_queue.pop().unwrap();
-            println!("Result: {:?}", result);
-            // add to the data.snip_items
-            self.data.snip_items.push(SnipItem {
-                id: Uuid::new_v4(),
-                title: result.title,
-                image_url: result.images.original.fullsize.url.clone(),
-                tex: result.text.clone(),
-                typst: text_and_tex2typst(&result.text),
-            });
-        }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -131,6 +194,12 @@ impl App for TypstScan {
                     .resizable(false)
                     .exact_width(PANEL_WIDTH)
                     .show_inside(ui, |ui| {
+                        if ui.button("Capture").clicked() {
+                            *self.hotkey_flag.lock() = true;
+                        }
+
+                        ui.separator();
+
                         const ROW_HEIGHT: f32 = 30.0;
                         egui_extras::TableBuilder::new(ui)
                             .striped(true)
@@ -149,9 +218,6 @@ impl App for TypstScan {
                                             if label.clicked() {
                                                 self.data.selected_snip_item = Some(snip_item.id);
                                             }
-                                            // if label.double_clicked() {
-                                            //     self.snip_items.retain(|item| item.id != snip_item.id);
-                                            // }
                                         });
                                         if row.response().clicked() {
                                             self.data.selected_snip_item = Some(snip_item.id);
@@ -165,9 +231,8 @@ impl App for TypstScan {
                     if let Some(selected_snip_item) = self.data.selected_snip_item {
                         if let Some(snip_item) = self.data.snip_items.iter_mut().find(|item| item.id == selected_snip_item) {
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                                // show image based on the image url
                                 ui.vertical_centered(|ui| {
-                                    ui.add(egui::Image::from_uri(&snip_item.image_url).max_height(250.0));
+                                    ui.add(egui::Image::from_uri(&snip_item.display_image).max_height(250.0));
                                 });
 
                                 ui.add_space(32.0);
@@ -193,8 +258,7 @@ impl App for TypstScan {
                 });
             }
             MainView::ContinuousClipboard => {}
-            MainView::ReplaceRules => {
-            }
+            MainView::ReplaceRules => {}
             MainView::Settings => {
                 ui.scope_builder(egui::UiBuilder::new(), |ui| {
                     egui::Grid::new("settings_grid")
@@ -206,21 +270,10 @@ impl App for TypstScan {
                             ui.add(egui::TextEdit::singleline(&mut self.data.mathpix_api_key).password(true));
                             ui.end_row();
 
-                            ui.label("test stuff");
-                            if ui.button("Add Snip Item").clicked() {
-                                self.data.snip_items.push(SnipItem {
-                                    id: Uuid::new_v4(),
-                                    title: "New Snip Item asdasd asd as das das ad as asd as das das".to_string(),
-                                    image_url: "https://picsum.photos/400/300".to_string(),
-                                    tex: "test tex sada asdasd  efafadasf af as fasdas efaf asf asf a".to_string(),
-                                    typst: "test typst adhuah uifa bas fash ash uihas fhasu hfau".to_string(),
-                                });
-                            }
-                            ui.end_row();
-
                             ui.label("delete all");
                             if ui.button("delete all").clicked() {
                                 self.data.snip_items.clear();
+                                self.data.selected_snip_item = None;
                             }
                             ui.end_row();
 
@@ -228,85 +281,42 @@ impl App for TypstScan {
                             ui.add(egui::ProgressBar::new(0.618).show_percentage());
                             ui.end_row();
 
-                            ui.checkbox(&mut self.overlay.lock(), "Shared Flag");
+                            ui.checkbox(&mut self.hotkey_flag.lock(), "Shared Flag");
                             ui.end_row();
-
-                            ui.label("Mouse Position");
-                            ui.label(format!("{:?}", get_mouse_position()));
                         });
                 });
             }
         });
 
         // start the screenshot
-        if *self.overlay.lock() {
-            let viewport_id = egui::ViewportId::from_hash_of("screenshot_viewport");
-            let viewport_builder = egui::ViewportBuilder::default()
-                .with_title("Screenshot Viewport")
-                .with_resizable(false)
-                .with_always_on_top()
-                .with_maximized(true)
-                .with_decorations(false)
-                .with_transparent(true);
-            ctx.show_viewport_immediate(viewport_id, viewport_builder, |ctx, class| {
-                egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
-                    if let Some(mouse_pos) = ctx.input(|i| i.pointer.hover_pos()) {
-                        ui.label(format!("Mouse position: {:?}", mouse_pos));
-                        let available_rect = ui.max_rect();
-                        let painter = ui.painter();
-                        // draw a cross-hair at the mouse position
-                        painter.line_segment(
-                            [
-                                Pos2::new(available_rect.min.x, mouse_pos.y),
-                                Pos2::new(available_rect.max.x, mouse_pos.y),
-                            ],
-                            Stroke::new(1.0, Color32::GRAY),
-                        );
-                        painter.line_segment(
-                            [
-                                Pos2::new(mouse_pos.x, available_rect.min.y),
-                                Pos2::new(mouse_pos.x, available_rect.max.y),
-                            ],
-                            Stroke::new(1.0, Color32::GRAY),
-                        );
-                    } else {
-                        ui.label("Mouse is not over the UI.");
-                    }
-
-                    if ctx.input(|i| i.pointer.any_click()) {
-                        if self.screenshot_start.is_none() {
-                            self.screenshot_start = get_mouse_position();
-                        } else {
-                            self.screenshot_end = get_mouse_position();
-                            println!("Screenshot start: {:?}, end: {:?}", self.screenshot_start, self.screenshot_end);
-                            let cropped_img = get_cropped_screenshot(self.screenshot_start.unwrap(), self.screenshot_end.unwrap());
-                            let mut jpeg_data: Vec<u8> = Vec::new();
-                            cropped_img
-                                .write_to(&mut std::io::Cursor::new(&mut jpeg_data), ImageFormat::Png)
-                                .expect("Failed to write cropped image to JPEG format");
-                            let mathpix_api_key = self.data.mathpix_api_key.clone();
-                            let result_queue = self.result_queue.clone();
-                            thread::spawn(move || {
-                                if let Err(e) = get_mathpix_result(&mathpix_api_key, jpeg_data, result_queue) {
-                                    eprintln!("Error: {:?}", e);
-                                }
-                            });
-                            *self.overlay.lock() = false;
-                            self.screenshot_start = None;
-                            self.screenshot_end = None;
-                        }
-                    }
-
-                    if let Some(drag_start) = self.screenshot_start {
-                        ui.label(format!("Drag start: {:?}", drag_start));
-                    }
-
-                    if let Some(drag_end) = self.screenshot_end {
-                        ui.label(format!("Drag end: {:?}", drag_end));
-                    }
+        if *self.hotkey_flag.lock() {
+            *self.hotkey_flag.lock() = false;
+            if let Some(screenshot_path) = get_screenshot() {
+                let id = Uuid::new_v4();
+                self.data.snip_items.push(SnipItem {
+                    id,
+                    title: "Processing...".to_string(),
+                    display_image: screenshot_path.to_string_lossy().to_string(),
+                    original_image: String::new(),
+                    rendered_image: String::new(),
+                    tex: String::new(),
+                    typst: String::new(),
                 });
-            });
+                self.task_sender
+                    .send(SnipTask {
+                        id: Uuid::new_v4(),
+                        screenshot_path,
+                        api_key: self.data.mathpix_api_key.clone(),
+                    })
+                    .unwrap();
+            }
         }
+
+        // check the results in the channel
+        if let Ok(result) = self.result_receiver.try_recv() {
+            println!("Result: {:?}", result);
+        }
+
         // put into continuous mode (so that hotkey still work when the app is not in focus)
         ctx.request_repaint();
     }
@@ -317,96 +327,13 @@ impl App for TypstScan {
     }
 }
 
-fn get_cropped_screenshot(start_pos: (i32, i32), end_pos: (i32, i32)) -> DynamicImage {
-    let monitor = xcap::Monitor::from_point(start_pos.0, start_pos.1).expect("Failed to get monitor");
-    let image: RgbaImage = monitor.capture_image().expect("Failed to capture monitor");
-    let image: RgbImage = image.convert();
-    println!("Image size: {:?}", image.dimensions());
-    let monitor_scale_factor = monitor.scale_factor();
-    println!("monitor scale factor: {:?}", monitor_scale_factor);
-    println!("monitor width and height: {:?}, {:?}", monitor.width(), monitor.height());
-    let image = DynamicImage::ImageRgb8(image);
-    image.crop_imm(
-        (monitor_scale_factor * (start_pos.0 - monitor.x()) as f32) as u32,
-        (monitor_scale_factor * (start_pos.1 - monitor.y()) as f32) as u32,
-        (monitor_scale_factor * (end_pos.0 - start_pos.0) as f32) as u32,
-        (monitor_scale_factor * (end_pos.1 - start_pos.1) as f32) as u32,
-    )
-}
-
-fn get_mouse_position() -> Option<(i32, i32)> {
-    let position = mouse_position::mouse_position::Mouse::get_mouse_position();
-    match position {
-        mouse_position::mouse_position::Mouse::Position { x, y } => Some((x, y)),
-        mouse_position::mouse_position::Mouse::Error => None,
-    }
-}
-
-fn get_mathpix_result(
-    api_key: &str,
-    screenshot_data: Vec<u8>,
-    result_queue: Arc<Mutex<Vec<MathpixResult>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Set up headers
-    let mut headers = header::HeaderMap::new();
-    headers.insert("Authorization", header::HeaderValue::from_str(&format!("Bearer {}", api_key))?);
-    headers.insert("Accept", header::HeaderValue::from_static("*/*"));
-    headers.insert(
-        "User-Agent",
-        header::HeaderValue::from_static("Mathpix Snip MacOS App v3.4.11(3411.2)"),
-    );
-
-    // Options payload (similar to the Swift `options` dictionary)
-    let options_payload = json!({
-        "config": {
-            "include_diagrams": true,
-            "idiomatic_eqn_arrays": true,
-            "math_display_delimiters": ["\n\\[\n", "\n\\]\n"],
-            "ocr_version": 2,
-            "mmd_version": "1.3.0",
-            "math_inline_delimiters": ["\\(", "\\)"],
-            "rm_fonts": false
-        },
-        "metadata": {
-            "version": "3.4.11",
-            "platform": "macOS 15.2.0",
-            "count": 6,
-            "input_type": "crop"
-        }
-    });
-    let client = Client::new();
-    let form = multipart::Form::new()
-        .part("file", Part::bytes(screenshot_data).file_name("image.png").mime_str("image/png")?)
-        .part(
-            "options_json",
-            Part::text(options_payload.to_string()).mime_str("application/json")?,
-        );
-
-    let response = client
-        .post("https://snip-api.mathpix.com/v1/snips-multipart")
-        .headers(headers)
-        .multipart(form)
-        .send()?;
-
-    // print response raw text
-    // println!("Response: {:?}", response.text()?);
-    // return Ok(());
-
-    // handle response
-    let mathpix_result: MathpixResult = response.json::<MathpixResult>()?;
-    // push to result queue
-    let mut result_queue = result_queue.lock();
-    result_queue.push(mathpix_result);
-    println!("Result queue: {:?}", result_queue);
-
-    Ok(())
-}
-
 #[derive(serde::Deserialize, serde::Serialize)]
 struct SnipItem {
     id: Uuid,
     title: String,
-    image_url: String,
+    display_image: String,
+    original_image: String,
+    rendered_image: String,
     tex: String,
     typst: String,
 }
@@ -417,6 +344,26 @@ struct ReplaceRule {
     replacement: String,
 }
 
+struct SnipTask {
+    id: Uuid,
+    screenshot_path: std::path::PathBuf,
+    api_key: String,
+}
+
+#[derive(Debug)]
+struct TaskResult {
+    id: Uuid,
+    original_image: String,
+    rendered_image: String,
+    text: String,
+    latex: Option<String>,
+    typst: String,
+    title: String,
+    snip_count: u64,
+    snip_limit: u64,
+}
+
+// The following is the struct for the Mathpix API response
 #[derive(Debug, Deserialize)]
 struct MathpixResult {
     id: String,
@@ -461,4 +408,50 @@ struct UrlDetail {
 struct TimeMs {
     ocr_api_response: u64,
     read_request_body: u64,
+}
+
+#[cfg(target_os = "macos")]
+fn get_screenshot() -> Option<std::path::PathBuf> {
+    let storage_path = get_storage_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp")); // Fallback to /tmp if no storage path
+    let file_name = storage_path.join(format!("screenshot_{}.png", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
+    std::process::Command::new("screencapture")
+        .arg("-i")
+        .arg(&file_name)
+        .output()
+        .unwrap();
+
+    // check the path if teh file exists
+    if file_name.exists() {
+        println!("Screenshot saved to: {:?}", file_name);
+        Some(file_name)
+    } else {
+        println!("Screenshot cancelled.");
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_screenshot() -> Option<std::path::PathBuf> {
+    unimplemented!()
+}
+
+fn get_storage_dir() -> Option<std::path::PathBuf> {
+    eframe::storage_dir("Typst Scan")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_screen_capture() {
+        get_screenshot();
+    }
+
+    #[test]
+    fn test_get_storage() {
+        if let Some(storage_path) = eframe::storage_dir("Typst Scan") {
+            println!("Storage path: {:?}", storage_path);
+        }
+    }
 }
