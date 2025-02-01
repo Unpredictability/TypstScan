@@ -1,37 +1,45 @@
-use eframe::egui::mutex::Mutex;
 use eframe::{run_native, App};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 
 mod app;
+mod worker;
 
 use app::TypstScan;
 use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 
-fn main() -> eframe::Result {
-    // create a shared state for hotkey callback and the eframe app
-    let hotkey_flag = Arc::new(Mutex::new(false));
+fn main() {
+    // Create a global API key that is shared between app and worker
+    let global_api_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
+    // Create channels for sending tasks to the worker thread and receiving results
+    let (task_sender, task_receiver) = mpsc::channel::<worker::SnipTask>();
+    let (result_sender, result_receiver) = mpsc::channel::<worker::TaskResult>();
+
+    let worker_thread = worker::start_worker(task_receiver, result_sender, global_api_key.clone()); // need to get api key from app storage here
+
     // Create a new hotkey hook
     let hook = Hook::new().expect("Failed to create hotkey hook");
-
-    // Define the hotkey: Command + Shift + S
+    // Define the hotkey
     let hotkey = Hotkey {
         key_code: KeyCode::KeyZ,
         modifiers: Modifiers::CONTROL | Modifiers::ALT,
     };
 
-    // Register the hotkey with its associated action
-    let hotkey_flag_clone = hotkey_flag.clone();
+    let task_sender_clone = task_sender.clone();
     hook.register(hotkey, move || {
         println!("Hotkey pressed!");
-        let mut hotkey_flag = hotkey_flag_clone.lock();
-        *hotkey_flag = !*hotkey_flag;
+        task_sender_clone.send(worker::SnipTask::new()).unwrap()
     })
     .expect("Failed to register hotkey");
+
 
     let native_options = eframe::NativeOptions::default();
     run_native(
         "Typst Scan",
         native_options,
-        Box::new(|cc| Ok(Box::new(TypstScan::new(cc, hotkey_flag)))),
-    )
+        Box::new(|cc| Ok(Box::new(TypstScan::new(cc, task_sender, result_receiver, global_api_key)))),
+    ).unwrap();
+
+    // Wait for the worker thread to finish
+    worker_thread.join().unwrap();
 }

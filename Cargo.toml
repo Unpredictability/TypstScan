@@ -9,13 +9,11 @@ eframe = { version = "0.30", default-features = false, features = [
     "wgpu", # Use the glow rendering backend. Alternative: "wgpu".
     "persistence", # Enable restoring app state when restarting the app.
     #    "wayland",       # To support Linux (and CI)
-    "__screenshot"
 ] }
 serde = { version = "1", features = ["derive"] }
 egui_extras = { version = "0.30.0", features = [
     "all_loaders",
 ] }
-image = { version = "0.25.5", features = ["png", "jpeg"] }
 uuid = { version = "1.12.1", features = [
     "v4",
     "fast-rng",
@@ -25,7 +23,6 @@ uuid = { version = "1.12.1", features = [
 livesplit-hotkey = "0.8.0"
 reqwest = { version = "0.12.12", features = ["multipart", "json", "blocking"] }
 serde_json = "1.0.138"
-xcap = "0.2.2"
 mouse_position = "0.1.4"
 tex2typst-rs = "0.2.0"
 chrono = "0.4.39"
