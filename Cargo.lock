@@ -2932,9 +2932,9 @@ dependencies = [
 
 [[package]]
 name = "tex2typst-rs"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70376ce5ea82b03759011ac8cb09ee3b2e5c016fdd37abc45e1192dd0f976400"
+checksum = "bc4d0445e452735de002d98bf26f0eac4e1e533fb7e2483749e980878b3eb60c"
 dependencies = [
  "regex",
 ]

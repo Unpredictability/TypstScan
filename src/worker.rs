@@ -51,7 +51,7 @@ pub(crate) fn start_worker(
             );
 
             if let Some(screenshot_path) = get_screenshot() {
-                let screenshot_data = std::fs::read(screenshot_path).expect("Failed to read screenshot file");
+                let screenshot_data = std::fs::read(&screenshot_path).expect("Failed to read screenshot file");
                 let form = multipart::Form::new()
                     .part(
                         "file",
@@ -74,6 +74,7 @@ pub(crate) fn start_worker(
                         result_sender
                             .send(TaskResult {
                                 id: snip_task.id,
+                                local_image: screenshot_path.to_string_lossy().to_string(),
                                 original_image: mathpix_result.images.original.fullsize.url.clone(),
                                 rendered_image: mathpix_result.images.rendered.fullsize.url.clone(),
                                 text: mathpix_result.text.clone(),
@@ -109,14 +110,15 @@ impl SnipTask {
 #[derive(Debug)]
 pub(crate) struct TaskResult {
     pub(crate) id: Uuid,
+    pub(crate) local_image: String,
     pub(crate) original_image: String,
     pub(crate) rendered_image: String,
     pub(crate) text: String,
-    latex: Option<String>,
+    pub(crate) latex: Option<String>,
     pub(crate) typst: String,
     pub(crate) title: String,
-    snip_count: u64,
-    snip_limit: u64,
+    pub(crate) snip_count: u64,
+    pub(crate) snip_limit: u64,
 }
 
 // The following is the struct for the Mathpix API response

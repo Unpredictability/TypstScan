@@ -15,6 +15,8 @@ pub struct TypstScanData {
     replace_rules: Vec<ReplaceRule>,
     main_view: MainView,
     selected_snip_item: Option<Uuid>,
+    api_used: usize,
+    api_limit: usize,
 }
 
 impl Default for TypstScanData {
@@ -25,6 +27,8 @@ impl Default for TypstScanData {
             replace_rules: Vec::new(),
             main_view: MainView::default(),
             selected_snip_item: None,
+            api_used: 0,
+            api_limit: usize::MAX,
         }
     }
 }
@@ -48,6 +52,8 @@ impl TypstScan {
         } else {
             TypstScanData::default()
         };
+
+        *global_api_key.lock().unwrap() = typst_scan_data.mathpix_api_key.clone();
 
         Self {
             data: typst_scan_data,
@@ -116,7 +122,7 @@ impl App for TypstScan {
                             .sense(egui::Sense::click())
                             .header(0.0, |_| {})
                             .body(|mut body| {
-                                for snip_item in &self.data.snip_items {
+                                for snip_item in self.data.snip_items.iter().rev() {
                                     body.row(ROW_HEIGHT, |mut row| {
                                         row.set_selected(self.data.selected_snip_item.as_ref() == Some(&snip_item.id));
                                         row.col(|ui| {
@@ -173,7 +179,7 @@ impl App for TypstScan {
                         .spacing([60.0, 16.0])
                         .striped(true)
                         .show(ui, |ui| {
-                            ui.label("Mathpix API Key (Require Restart)");
+                            ui.label("Mathpix API Key");
                             ui.add(egui::TextEdit::singleline(&mut self.data.mathpix_api_key).password(true));
                             if let Ok(mut global_api_key) = self.global_api_key.lock() {
                                 if *global_api_key != self.data.mathpix_api_key {
@@ -182,8 +188,8 @@ impl App for TypstScan {
                             }
                             ui.end_row();
 
-                            ui.label("delete all");
-                            if ui.button("delete all").clicked() {
+                            ui.label("Delete All Snips");
+                            if ui.button("delete!!!").clicked() {
                                 self.data.snip_items.clear();
                                 self.data.selected_snip_item = None;
                             }
@@ -208,6 +214,7 @@ impl App for TypstScan {
                 tex: result.text,
                 typst: result.typst,
             });
+            self.data.selected_snip_item = Some(result.id);
         }
     }
 

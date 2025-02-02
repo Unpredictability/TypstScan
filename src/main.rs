@@ -40,6 +40,7 @@ fn main() {
         Box::new(|cc| Ok(Box::new(TypstScan::new(cc, task_sender, result_receiver, global_api_key)))),
     ).unwrap();
 
+    // I don't know why this will make the app freeze when exiting
     // Wait for the worker thread to finish
-    worker_thread.join().unwrap();
+    // worker_thread.join().unwrap();
 }
