@@ -8,7 +8,6 @@ use app::TypstScan;
 use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 
 fn main() {
-
     // Create a global API key that is shared between app and worker
     let global_api_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
@@ -16,7 +15,7 @@ fn main() {
     let (task_sender, task_receiver) = mpsc::channel::<worker::SnipTask>();
     let (result_sender, result_receiver) = mpsc::channel::<worker::TaskResult>();
 
-    let worker_thread = worker::start_worker(task_receiver, result_sender, global_api_key.clone()); // need to get api key from app storage here
+    worker::start_worker(task_receiver, result_sender, global_api_key.clone()); // need to get api key from app storage here
 
     // Create a new hotkey hook
     let hook = Hook::new().expect("Failed to create hotkey hook");
@@ -40,8 +39,4 @@ fn main() {
         Box::new(|cc| Ok(Box::new(TypstScan::new(cc, task_sender, result_receiver, global_api_key)))),
     )
     .unwrap();
-
-    // I don't know why this will make the app freeze when exiting
-    // Wait for the worker thread to finish
-    // worker_thread.join().unwrap();
 }
