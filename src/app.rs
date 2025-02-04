@@ -2,9 +2,9 @@ use crate::worker::{SnipTask, TaskResult};
 use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
-use mouse_position;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use tex2typst_rs::text_and_tex2typst;
 use uuid::Uuid;
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -15,8 +15,9 @@ pub struct TypstScanData {
     replace_rules: Vec<ReplaceRule>,
     main_view: MainView,
     selected_snip_item: Option<Uuid>,
-    api_used: usize,
-    api_limit: usize,
+    api_used: u64,
+    api_limit: u64,
+    hide_when_capturing: bool,
 }
 
 impl Default for TypstScanData {
@@ -28,7 +29,8 @@ impl Default for TypstScanData {
             main_view: MainView::default(),
             selected_snip_item: None,
             api_used: 0,
-            api_limit: usize::MAX,
+            api_limit: 60000,
+            hide_when_capturing: false,
         }
     }
 }
@@ -145,7 +147,7 @@ impl App for TypstScan {
                         if let Some(snip_item) = self.data.snip_items.iter_mut().find(|item| item.id == selected_snip_item) {
                             egui::ScrollArea::vertical().show(ui, |ui| {
                                 ui.vertical_centered(|ui| {
-                                    ui.add(egui::Image::from_uri(&snip_item.display_image).max_height(250.0));
+                                    ui.add(egui::Image::from_uri(&snip_item.local_image).max_height(250.0));
                                 });
 
                                 ui.add_space(32.0);
@@ -159,6 +161,9 @@ impl App for TypstScan {
 
                                 ui.add_space(16.0);
                                 ui.heading("Typst");
+                                if ui.button("regenerate").clicked() {
+                                    snip_item.typst = text_and_tex2typst(&snip_item.tex);
+                                }
                                 ui.add(
                                     egui::TextEdit::multiline(&mut snip_item.typst)
                                         .code_editor()
@@ -188,6 +193,10 @@ impl App for TypstScan {
                             }
                             ui.end_row();
 
+                            ui.label("Hide Window when Capturing");
+                            ui.checkbox(&mut self.data.hide_when_capturing, "Sure");
+                            ui.end_row();
+
                             ui.label("Delete All Snips");
                             if ui.button("delete!!!").clicked() {
                                 self.data.snip_items.clear();
@@ -196,7 +205,7 @@ impl App for TypstScan {
                             ui.end_row();
 
                             ui.label("API usage");
-                            ui.add(egui::ProgressBar::new(0.618).show_percentage());
+                            ui.add(egui::ProgressBar::new(self.data.api_used as f32 / self.data.api_limit as f32).show_percentage());
                             ui.end_row();
                         });
                 });
@@ -208,13 +217,15 @@ impl App for TypstScan {
             self.data.snip_items.push(SnipItem {
                 id: result.id,
                 title: result.title,
-                display_image: result.rendered_image.clone(),
+                local_image: format!("file://{}", result.local_image),
                 original_image: result.original_image,
                 rendered_image: result.rendered_image,
                 tex: result.text,
                 typst: result.typst,
             });
             self.data.selected_snip_item = Some(result.id);
+            self.data.api_used = result.snip_count;
+            self.data.api_limit = result.snip_limit;
         }
     }
 
@@ -228,7 +239,7 @@ impl App for TypstScan {
 struct SnipItem {
     id: Uuid,
     title: String,
-    display_image: String,
+    local_image: String,
     original_image: String,
     rendered_image: String,
     tex: String,

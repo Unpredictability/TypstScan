@@ -23,6 +23,5 @@ uuid = { version = "1.12.1", features = [
 livesplit-hotkey = "0.8.0"
 reqwest = { version = "0.12.12", features = ["multipart", "json", "blocking"] }
 serde_json = "1.0.138"
-mouse_position = "0.1.4"
 tex2typst-rs = "0.2.2"
 chrono = "0.4.39"

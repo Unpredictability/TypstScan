@@ -8,6 +8,7 @@ use app::TypstScan;
 use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 
 fn main() {
+
     // Create a global API key that is shared between app and worker
     let global_api_key: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
@@ -32,13 +33,13 @@ fn main() {
     })
     .expect("Failed to register hotkey");
 
-
     let native_options = eframe::NativeOptions::default();
     run_native(
         "Typst Scan",
         native_options,
         Box::new(|cc| Ok(Box::new(TypstScan::new(cc, task_sender, result_receiver, global_api_key)))),
-    ).unwrap();
+    )
+    .unwrap();
 
     // I don't know why this will make the app freeze when exiting
     // Wait for the worker thread to finish
