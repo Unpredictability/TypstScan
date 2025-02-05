@@ -1,4 +1,5 @@
 use crate::worker::{SnipTask, TaskResult};
+use eframe::egui::{FontData, FontFamily};
 use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
@@ -49,6 +50,20 @@ impl TypstScan {
         result_receiver: Receiver<TaskResult>,
         global_api_key: Arc<Mutex<String>>,
     ) -> Self {
+        // add font
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "JB".to_owned(),
+            Arc::new(FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"))),
+        );
+        fonts.font_data.insert(
+            "SC".to_owned(),
+            Arc::new(FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC-Regular.ttf"))),
+        );
+        fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(0, "JB".to_owned());
+        fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(1, "SC".to_owned());
+        cc.egui_ctx.set_fonts(fonts);
+
         let typst_scan_data = if let Some(storage) = cc.storage {
             eframe::get_value(storage, "typst_scan_data").unwrap_or_default()
         } else {
@@ -160,10 +175,14 @@ impl App for TypstScan {
                                 );
 
                                 ui.add_space(16.0);
-                                ui.heading("Typst");
-                                if ui.button("regenerate").clicked() {
-                                    snip_item.typst = text_and_tex2typst(&snip_item.tex);
-                                }
+                                ui.horizontal(|ui| {
+                                    ui.heading("Typst");
+                                    if ui.button("regenerate").clicked() {
+                                        snip_item.typst = text_and_tex2typst(&snip_item.tex)
+                                            .map_err(|e| eprintln!("Error: {:?}", e))
+                                            .unwrap_or_default();
+                                    }
+                                });
                                 ui.add(
                                     egui::TextEdit::multiline(&mut snip_item.typst)
                                         .code_editor()
@@ -250,4 +269,22 @@ struct SnipItem {
 struct ReplaceRule {
     pattern: String,
     replacement: String,
+}
+
+pub fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "jost".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono[wght].ttf"))),
+    );
+
+    fonts.font_data.insert(
+        "poppins".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSC-VariableFont_wght.ttf"
+        ))),
+    );
+
+    ctx.set_fonts(fonts);
 }

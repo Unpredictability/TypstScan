@@ -79,7 +79,9 @@ pub(crate) fn start_worker(
                                 rendered_image: mathpix_result.images.rendered.fullsize.url.clone(),
                                 text: mathpix_result.text.clone(),
                                 latex: mathpix_result.latex.clone(),
-                                typst: text_and_tex2typst(&mathpix_result.text),
+                                typst: text_and_tex2typst(&mathpix_result.text)
+                                    .map_err(|e| eprintln!("Error: {:?}", e))
+                                    .unwrap(),
                                 title: mathpix_result.title.clone(),
                                 snip_count: mathpix_result.snip_count,
                                 snip_limit: mathpix_result.snip_limit,
