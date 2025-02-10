@@ -24,6 +24,8 @@ pub struct TypstScanData {
     hide_when_capturing: bool,
     shortcut: Shortcut,
     hotkey: Hotkey,
+    use_continuous_clipboard: bool,
+    continuous_clipboard: String,
 }
 
 impl Default for TypstScanData {
@@ -48,6 +50,8 @@ impl Default for TypstScanData {
                 key_code: KeyCode::from_str("Z").unwrap(),
                 modifiers: Modifiers::CONTROL | Modifiers::ALT,
             },
+            use_continuous_clipboard: false,
+            continuous_clipboard: String::new(),
         }
     }
 }
@@ -79,6 +83,7 @@ impl TypstScan {
         );
         fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(0, "JB".to_owned());
         fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(1, "SC".to_owned());
+        fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(1, "SC".to_owned());
         cc.egui_ctx.set_fonts(fonts);
 
         let typst_scan_data = if let Some(storage) = cc.storage {
@@ -224,7 +229,22 @@ impl App for TypstScan {
                     }
                 });
             }
-            MainView::ContinuousClipboard => {}
+            MainView::ContinuousClipboard => {
+                ui.checkbox(&mut self.data.use_continuous_clipboard, "Use Continuous Clipboard");
+                ui.horizontal(|ui| {
+                    if ui.button("copy all").clicked() {
+                        ctx.copy_text(self.data.continuous_clipboard.clone());
+                    }
+                    if ui.button("take all").clicked() {
+                        ctx.copy_text(self.data.continuous_clipboard.clone());
+                        self.data.continuous_clipboard.clear();
+                    }
+                });
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add(egui::TextEdit::multiline(&mut self.data.continuous_clipboard).desired_width(f32::INFINITY));
+                });
+            }
             MainView::ReplaceRules => {}
             MainView::Settings => {
                 ui.scope_builder(egui::UiBuilder::new(), |ui| {
@@ -295,6 +315,11 @@ impl App for TypstScan {
 
         // check the results in the channel
         if let Ok(result) = self.result_receiver.try_recv() {
+            if self.data.use_continuous_clipboard {
+                self.data.continuous_clipboard.push_str(&result.typst);
+                self.data.continuous_clipboard.push_str("\n");
+            }
+
             self.data.snip_items.push(SnipItem {
                 id: result.id,
                 title: result.title,
