@@ -1,11 +1,11 @@
-use crate::worker;
 use crate::worker::{SnipTask, TaskResult};
 use eframe::egui::{FontData, FontFamily};
 use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
-use egui_keybind::{Bind, Keybind, Shortcut};
+use egui_keybind::{Keybind, Shortcut};
 use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
+use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tex2typst_rs::text_and_tex2typst;
@@ -23,6 +23,7 @@ pub struct TypstScanData {
     api_limit: u64,
     hide_when_capturing: bool,
     shortcut: Shortcut,
+    hotkey: Hotkey,
 }
 
 impl Default for TypstScanData {
@@ -36,7 +37,17 @@ impl Default for TypstScanData {
             api_used: 0,
             api_limit: 60000,
             hide_when_capturing: false,
-            shortcut: Shortcut::default(),
+            shortcut: Shortcut::new(
+                Some(egui::KeyboardShortcut::new(
+                    egui::Modifiers::CTRL | egui::Modifiers::ALT,
+                    egui::Key::Z,
+                )),
+                None,
+            ),
+            hotkey: Hotkey {
+                key_code: KeyCode::from_str("Z").unwrap(),
+                modifiers: Modifiers::CONTROL | Modifiers::ALT,
+            },
         }
     }
 }
@@ -81,14 +92,11 @@ impl TypstScan {
         // Create a new hotkey hook
         let hook = Hook::new().expect("Failed to create hotkey hook");
         // Define the hotkey
-        let hotkey = Hotkey {
-            key_code: KeyCode::KeyZ,
-            modifiers: Modifiers::CONTROL | Modifiers::ALT,
-        };
+        let hotkey = typst_scan_data.hotkey;
 
         let task_sender_clone = task_sender.clone();
         hook.register(hotkey, move || {
-            println!("Hotkey pressed! - Z");
+            println!("Hotkey pressed!");
             task_sender_clone.send(SnipTask::new()).unwrap();
         })
         .expect("Failed to register hotkey");
@@ -105,7 +113,7 @@ impl TypstScan {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
 enum MainView {
-    Main,
+    Snips,
     ContinuousClipboard,
     ReplaceRules,
     Settings,
@@ -113,7 +121,7 @@ enum MainView {
 
 impl Default for MainView {
     fn default() -> Self {
-        Self::Main
+        Self::Snips
     }
 }
 
@@ -127,7 +135,7 @@ impl App for TypstScan {
 
             egui::menu::bar(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.data.main_view, MainView::Main, "Main");
+                    ui.selectable_value(&mut self.data.main_view, MainView::Snips, "Snips");
                     ui.selectable_value(&mut self.data.main_view, MainView::ContinuousClipboard, "Continuous Clipboard");
                     ui.selectable_value(&mut self.data.main_view, MainView::ReplaceRules, "Replace Rules");
                     ui.selectable_value(&mut self.data.main_view, MainView::Settings, "Settings");
@@ -140,7 +148,7 @@ impl App for TypstScan {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.data.main_view {
-            MainView::Main => {
+            MainView::Snips => {
                 const PANEL_WIDTH: f32 = 200.0;
                 egui::SidePanel::left("main_left")
                     .resizable(false)
@@ -235,11 +243,39 @@ impl App for TypstScan {
                             ui.end_row();
 
                             ui.label("Global Hotkey");
-                            let response = ui.add(Keybind::new(&mut self.data.shortcut, "example_keybind"));
-                            ui.end_row();
+                            ui.horizontal(|ui| {
+                                ui.add(Keybind::new(&mut self.data.shortcut, "keybind_setter"));
+                                if ui.button("register").clicked() {
+                                    self.hotkey_hook.unregister(self.data.hotkey).unwrap();
+                                    let logged_key = self.data.shortcut.keyboard().unwrap();
+                                    let key_code: &str = logged_key.logical_key.name();
+                                    let modifiers = logged_key.modifiers;
+                                    let mut mods = Modifiers::empty();
 
-                            ui.label("Hide Window when Capturing");
-                            ui.checkbox(&mut self.data.hide_when_capturing, "Sure");
+                                    if modifiers.contains(egui::Modifiers::CTRL) {
+                                        mods.insert(Modifiers::CONTROL);
+                                    }
+                                    if modifiers.contains(egui::Modifiers::ALT) {
+                                        mods.insert(Modifiers::ALT);
+                                    }
+                                    if modifiers.contains(egui::Modifiers::SHIFT) {
+                                        mods.insert(Modifiers::SHIFT);
+                                    }
+
+                                    self.data.hotkey = Hotkey {
+                                        key_code: KeyCode::from_str(key_code).unwrap(),
+                                        modifiers: mods,
+                                    };
+                                    dbg!(self.data.hotkey);
+                                    let task_sender_clone = self.task_sender.clone();
+                                    self.hotkey_hook
+                                        .register(self.data.hotkey, move || {
+                                            println!("Hotkey pressed!");
+                                            task_sender_clone.send(SnipTask::new()).unwrap();
+                                        })
+                                        .expect("Failed to register hotkey");
+                                }
+                            });
                             ui.end_row();
 
                             ui.label("Delete All Snips");
