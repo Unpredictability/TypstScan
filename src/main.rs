@@ -5,7 +5,6 @@ mod app;
 mod worker;
 
 use app::TypstScan;
-use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 
 fn main() {
     // Create a global API key that is shared between app and worker
@@ -16,21 +15,6 @@ fn main() {
     let (result_sender, result_receiver) = mpsc::channel::<worker::TaskResult>();
 
     worker::start_worker(task_receiver, result_sender, global_api_key.clone()); // need to get api key from app storage here
-
-    // Create a new hotkey hook
-    let hook = Hook::new().expect("Failed to create hotkey hook");
-    // Define the hotkey
-    let hotkey = Hotkey {
-        key_code: KeyCode::KeyZ,
-        modifiers: Modifiers::CONTROL | Modifiers::ALT,
-    };
-
-    let task_sender_clone = task_sender.clone();
-    hook.register(hotkey, move || {
-        println!("Hotkey pressed!");
-        task_sender_clone.send(worker::SnipTask::new()).unwrap()
-    })
-    .expect("Failed to register hotkey");
 
     let native_options = eframe::NativeOptions::default();
     run_native(

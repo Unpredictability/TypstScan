@@ -9,6 +9,9 @@ use std::thread;
 use tex2typst_rs::text_and_tex2typst;
 use uuid::Uuid;
 
+#[cfg(target_os = "windows")]
+use screen_snip;
+
 pub(crate) fn start_worker(
     task_receiver: Receiver<SnipTask>,
     result_sender: Sender<TaskResult>,
@@ -192,7 +195,10 @@ fn get_screenshot() -> Option<std::path::PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn get_screenshot() -> Option<std::path::PathBuf> {
-    unimplemented!()
+    let storage_path = get_storage_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp")); // Fallback to /tmp if no storage path
+    let file_name = storage_path.join(format!("screenshot_{}.png", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
+    screen_snip::get_screen_snip(file_name.clone().into());
+    Some(file_name)
 }
 
 fn get_storage_dir() -> Option<std::path::PathBuf> {

@@ -23,5 +23,9 @@ uuid = { version = "1.12.1", features = [
 livesplit-hotkey = "0.8.0"
 reqwest = { version = "0.12.12", features = ["multipart", "json", "blocking"] }
 serde_json = "1.0.138"
-tex2typst-rs = "0.3.1"
+tex2typst-rs = "0.3.6"
 chrono = "0.4.39"
+egui-keybind = { version = "0.6.0", features = ["serde"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+screen-snip = "0.1.0"

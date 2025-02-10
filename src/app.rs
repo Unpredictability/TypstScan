@@ -1,8 +1,11 @@
+use crate::worker;
 use crate::worker::{SnipTask, TaskResult};
 use eframe::egui::{FontData, FontFamily};
 use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
+use egui_keybind::{Bind, Keybind, Shortcut};
+use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tex2typst_rs::text_and_tex2typst;
@@ -19,6 +22,7 @@ pub struct TypstScanData {
     api_used: u64,
     api_limit: u64,
     hide_when_capturing: bool,
+    shortcut: Shortcut,
 }
 
 impl Default for TypstScanData {
@@ -32,6 +36,7 @@ impl Default for TypstScanData {
             api_used: 0,
             api_limit: 60000,
             hide_when_capturing: false,
+            shortcut: Shortcut::default(),
         }
     }
 }
@@ -41,6 +46,7 @@ pub struct TypstScan {
     task_sender: Sender<SnipTask>,
     result_receiver: Receiver<TaskResult>,
     global_api_key: Arc<Mutex<String>>,
+    hotkey_hook: Hook,
 }
 
 impl TypstScan {
@@ -72,11 +78,27 @@ impl TypstScan {
 
         *global_api_key.lock().unwrap() = typst_scan_data.mathpix_api_key.clone();
 
+        // Create a new hotkey hook
+        let hook = Hook::new().expect("Failed to create hotkey hook");
+        // Define the hotkey
+        let hotkey = Hotkey {
+            key_code: KeyCode::KeyZ,
+            modifiers: Modifiers::CONTROL | Modifiers::ALT,
+        };
+
+        let task_sender_clone = task_sender.clone();
+        hook.register(hotkey, move || {
+            println!("Hotkey pressed! - Z");
+            task_sender_clone.send(SnipTask::new()).unwrap();
+        })
+        .expect("Failed to register hotkey");
+
         Self {
             data: typst_scan_data,
             task_sender,
             result_receiver,
             global_api_key,
+            hotkey_hook: hook,
         }
     }
 }
@@ -212,6 +234,10 @@ impl App for TypstScan {
                             }
                             ui.end_row();
 
+                            ui.label("Global Hotkey");
+                            let response = ui.add(Keybind::new(&mut self.data.shortcut, "example_keybind"));
+                            ui.end_row();
+
                             ui.label("Hide Window when Capturing");
                             ui.checkbox(&mut self.data.hide_when_capturing, "Sure");
                             ui.end_row();
@@ -269,22 +295,4 @@ struct SnipItem {
 struct ReplaceRule {
     pattern: String,
     replacement: String,
-}
-
-pub fn setup_custom_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    fonts.font_data.insert(
-        "jost".to_owned(),
-        Arc::new(FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono[wght].ttf"))),
-    );
-
-    fonts.font_data.insert(
-        "poppins".to_owned(),
-        Arc::new(FontData::from_static(include_bytes!(
-            "../assets/fonts/NotoSansSC-VariableFont_wght.ttf"
-        ))),
-    );
-
-    ctx.set_fonts(fonts);
 }
