@@ -24,7 +24,7 @@ pub struct TypstScanData {
     hide_when_capturing: bool,
     shortcut: Shortcut,
     hotkey: Hotkey,
-    use_continuous_clipboard: bool,
+    clipboard_mode: ClipboardMode,
     continuous_clipboard: String,
 }
 
@@ -50,7 +50,7 @@ impl Default for TypstScanData {
                 key_code: KeyCode::from_str("Z").unwrap(),
                 modifiers: Modifiers::CONTROL | Modifiers::ALT,
             },
-            use_continuous_clipboard: false,
+            clipboard_mode: ClipboardMode::CopyTypst,
             continuous_clipboard: String::new(),
         }
     }
@@ -83,7 +83,11 @@ impl TypstScan {
         );
         fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(0, "JB".to_owned());
         fonts.families.get_mut(&FontFamily::Monospace).unwrap().insert(1, "SC".to_owned());
-        fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(1, "SC".to_owned());
+        fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .unwrap()
+            .insert(1, "SC".to_owned());
         cc.egui_ctx.set_fonts(fonts);
 
         let typst_scan_data = if let Some(storage) = cc.storage {
@@ -122,6 +126,13 @@ enum MainView {
     ContinuousClipboard,
     ReplaceRules,
     Settings,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+enum ClipboardMode {
+    Continuous,
+    CopyTeX,
+    CopyTypst,
 }
 
 impl Default for MainView {
@@ -191,13 +202,15 @@ impl App for TypstScan {
                                 }
                             });
                     });
+
                 egui::CentralPanel::default().show_inside(ui, |ui| {
                     // display the image of the selected snip item
                     if let Some(selected_snip_item) = self.data.selected_snip_item {
                         if let Some(snip_item) = self.data.snip_items.iter_mut().find(|item| item.id == selected_snip_item) {
                             egui::ScrollArea::vertical().show(ui, |ui| {
+                                ui.add_space(10.0);
                                 ui.vertical_centered(|ui| {
-                                    ui.add(egui::Image::from_uri(&snip_item.local_image).max_height(250.0));
+                                    ui.add(egui::Image::from_uri(&snip_item.local_image).max_height(250.0).corner_radius(10.0));
                                 });
 
                                 ui.add_space(32.0);
@@ -230,7 +243,16 @@ impl App for TypstScan {
                 });
             }
             MainView::ContinuousClipboard => {
-                ui.checkbox(&mut self.data.use_continuous_clipboard, "Use Continuous Clipboard");
+                ui.heading("Clipboard Mode");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut self.data.clipboard_mode, ClipboardMode::Continuous, "Continuous");
+                    ui.radio_value(&mut self.data.clipboard_mode, ClipboardMode::CopyTeX, "Copy TeX");
+                    ui.radio_value(&mut self.data.clipboard_mode, ClipboardMode::CopyTypst, "Copy Typst");
+                });
+                ui.add_space(2.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.heading("Continuous Clipboard");
                 ui.horizontal(|ui| {
                     if ui.button("copy all").clicked() {
                         ctx.copy_text(self.data.continuous_clipboard.clone());
@@ -315,9 +337,17 @@ impl App for TypstScan {
 
         // check the results in the channel
         if let Ok(result) = self.result_receiver.try_recv() {
-            if self.data.use_continuous_clipboard {
-                self.data.continuous_clipboard.push_str(&result.typst);
-                self.data.continuous_clipboard.push_str("\n");
+            match self.data.clipboard_mode {
+                ClipboardMode::Continuous => {
+                    self.data.continuous_clipboard.push_str(&result.typst);
+                    self.data.continuous_clipboard.push_str("\n");
+                }
+                ClipboardMode::CopyTeX => {
+                    ctx.copy_text(result.text.clone());
+                }
+                ClipboardMode::CopyTypst => {
+                    ctx.copy_text(result.typst.clone());
+                }
             }
 
             self.data.snip_items.push(SnipItem {
