@@ -4,10 +4,12 @@ use eframe::{egui, App};
 use egui_extras;
 use egui_extras::Column;
 use egui_keybind::{Keybind, Shortcut};
+use egui_notify::Toasts;
 use livesplit_hotkey::{Hook, Hotkey, KeyCode, Modifiers};
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tex2typst_rs::text_and_tex2typst;
 use uuid::Uuid;
 
@@ -26,6 +28,7 @@ pub struct TypstScanData {
     hotkey: Hotkey,
     clipboard_mode: ClipboardMode,
     continuous_clipboard: String,
+    replace_rules_json: String,
 }
 
 impl Default for TypstScanData {
@@ -52,6 +55,7 @@ impl Default for TypstScanData {
             },
             clipboard_mode: ClipboardMode::CopyTypst,
             continuous_clipboard: String::new(),
+            replace_rules_json: String::new(),
         }
     }
 }
@@ -62,6 +66,7 @@ pub struct TypstScan {
     result_receiver: Receiver<TaskResult>,
     global_api_key: Arc<Mutex<String>>,
     hotkey_hook: Hook,
+    toasts: Toasts,
 }
 
 impl TypstScan {
@@ -116,6 +121,7 @@ impl TypstScan {
             result_receiver,
             global_api_key,
             hotkey_hook: hook,
+            toasts: Toasts::default(),
         }
     }
 }
@@ -267,7 +273,24 @@ impl App for TypstScan {
                     ui.add(egui::TextEdit::multiline(&mut self.data.continuous_clipboard).desired_width(f32::INFINITY));
                 });
             }
-            MainView::ReplaceRules => {}
+            MainView::ReplaceRules => {
+                if ui.button("load rules").clicked() {
+                    let rules_str: String = serde_json::to_string_pretty(&self.data.replace_rules).unwrap();
+                    self.data.replace_rules_json = rules_str;
+                }
+                if ui.button("register rules").clicked() {
+                    if let Ok(rules) = serde_json::from_str(&self.data.replace_rules_json) {
+                        eprintln!("Parsed rules: {:?}", &rules);
+                        self.data.replace_rules = rules;
+                        self.toasts.success("Registered rules").duration(Some(Duration::from_secs(5)));
+                    } else {
+                        self.toasts.info("Failed to parse rules").duration(Some(Duration::from_secs(5)));
+                    }
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add(egui::TextEdit::multiline(&mut self.data.replace_rules_json).desired_width(f32::INFINITY));
+                });
+            }
             MainView::Settings => {
                 ui.scope_builder(egui::UiBuilder::new(), |ui| {
                     egui::Grid::new("settings_grid")
@@ -350,6 +373,11 @@ impl App for TypstScan {
                 }
             }
 
+            let mut typst_replaced = result.typst.clone();
+            for rule in self.data.replace_rules.iter() {
+                typst_replaced = typst_replaced.replace(&rule.pattern, &rule.replacement);
+            }
+
             self.data.snip_items.push(SnipItem {
                 id: result.id,
                 title: result.title,
@@ -357,12 +385,14 @@ impl App for TypstScan {
                 original_image: result.original_image,
                 rendered_image: result.rendered_image,
                 tex: result.text,
-                typst: result.typst,
+                typst: typst_replaced,
             });
             self.data.selected_snip_item = Some(result.id);
             self.data.api_used = result.snip_count;
             self.data.api_limit = result.snip_limit;
         }
+
+        self.toasts.show(ctx);
     }
 
     /// Called by the framework to save state before shutdown.
@@ -382,7 +412,7 @@ struct SnipItem {
     typst: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 struct ReplaceRule {
     pattern: String,
     replacement: String,
