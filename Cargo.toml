@@ -27,6 +27,7 @@ tex2typst-rs = { version = "0.4.0", git = "https://github.com/Unpredictability/t
 chrono = "0.4.39"
 egui-keybind = { version = "0.6.0", features = ["serde"] }
 egui-notify = "0.19.0"
+arboard = "3.4.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 screen-snip = "0.1.0"

@@ -3,15 +3,38 @@ mod tests {
 
     #[test]
     fn test() {
-        assert_eq!(1, 1);
         use std::process::Command;
-        let script = r#"
+        let process_name = "scrcpy";
+        let window_name = "NoteX3";
+        let script = format!(
+            r#"
         tell application "System Events"
-            set scrcpyWindow to (first window of application process "scrcpy" whose name is "NoteX3")
+            set scrcpyWindow to (first window of application process "{process_name}" whose name is "{window_name}")
             perform action "AXRaise" of scrcpyWindow
         end tell
-    "#;
+    "#
+        );
 
-        let _ = Command::new("osascript").arg("-e").arg(script).output();
+        let out = Command::new("osascript").arg("-e").arg(script).output().unwrap();
+        println!("{:?}", out);
+    }
+
+    #[test]
+    fn test2() {
+        use std::process::Command;
+        let process_name = "scrcpyssasd";
+        let window_name = "NoteX3";
+        let script = format!(
+            r#"
+        tell application "System Events"
+            tell process "{process_name}"
+                set frontmost to true
+            end tell
+        end tell
+    "#
+        );
+
+        let output = Command::new("osascript").arg("-e").arg(script).output().unwrap();
+        println!("{:?}", output);
     }
 }

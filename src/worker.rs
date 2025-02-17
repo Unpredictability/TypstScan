@@ -1,8 +1,11 @@
+use crate::app::{ClipboardMode, TypstScanData};
+use arboard::Clipboard;
 use reqwest::blocking::multipart::Part;
 use reqwest::blocking::{multipart, Client};
 use reqwest::header;
 use serde::Deserialize;
 use serde_json::json;
+use std::process::Command;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,10 +15,10 @@ use uuid::Uuid;
 #[cfg(target_os = "windows")]
 use screen_snip;
 
-pub(crate) fn start_worker(
+pub fn start_worker(
     task_receiver: Receiver<SnipTask>,
     result_sender: Sender<TaskResult>,
-    api_key: Arc<Mutex<String>>,
+    app_data: Arc<Mutex<TypstScanData>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         // Options payload (similar to the Swift `options` dictionary)
@@ -42,10 +45,37 @@ pub(crate) fn start_worker(
             .expect("Failed to create reqwest client");
 
         for snip_task in task_receiver {
+            if let Ok(app_data) = app_data.lock() {
+                if app_data.bring_forward {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let process_name = app_data.target_process_name.clone();
+                        let window_name = app_data.target_window_title.clone();
+                        let script = format!(
+                            r#"
+                            tell application "System Events"
+                                tell process "{process_name}"
+                                    set frontmost to true
+                                end tell
+                            end tell
+                        "#
+                        );
+
+                        let out = Command::new("osascript").arg("-e").arg(script).output().unwrap();
+                        println!("{:?}", out);
+                    }
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        unimplemented!()
+                    }
+                }
+            }
+
             let mut headers = header::HeaderMap::new();
             headers.insert(
                 "Authorization",
-                header::HeaderValue::from_str(&format!("Bearer {}", api_key.lock().unwrap())).unwrap(),
+                header::HeaderValue::from_str(&format!("Bearer {}", app_data.lock().unwrap().mathpix_api_key)).unwrap(),
             );
             headers.insert("Accept", header::HeaderValue::from_static("*/*"));
             headers.insert(
@@ -74,6 +104,25 @@ pub(crate) fn start_worker(
 
                 match response.json::<MathpixResult>() {
                     Ok(mathpix_result) => {
+                        let typst = text_and_tex2typst(&mathpix_result.text).unwrap_or_else(|e| format!("Error: {:?}", e));
+                        let mut typst_replaced = typst.clone();
+                        if let Ok(app_data) = app_data.lock() {
+                            for rule in app_data.replace_rules.iter() {
+                                typst_replaced = typst_replaced.replace(&rule.pattern, &rule.replacement);
+                            }
+
+                            match app_data.clipboard_mode {
+                                ClipboardMode::Continuous => {
+                                    // do nothing, let the UI thread handle it
+                                }
+                                ClipboardMode::CopyTeX => {
+                                    Clipboard::new().unwrap().set_text(mathpix_result.text.clone()).unwrap();
+                                }
+                                ClipboardMode::CopyTypst => {
+                                    Clipboard::new().unwrap().set_text(typst_replaced.clone()).unwrap();
+                                }
+                            }
+                        }
                         result_sender
                             .send(TaskResult {
                                 id: snip_task.id,
@@ -82,9 +131,7 @@ pub(crate) fn start_worker(
                                 rendered_image: mathpix_result.images.rendered.fullsize.url.clone(),
                                 text: mathpix_result.text.clone(),
                                 latex: mathpix_result.latex.clone(),
-                                typst: text_and_tex2typst(&mathpix_result.text)
-                                    .map_err(|e| eprintln!("Error: {:?}", e))
-                                    .unwrap(),
+                                typst: typst_replaced,
                                 title: mathpix_result.title.clone(),
                                 snip_count: mathpix_result.snip_count,
                                 snip_limit: mathpix_result.snip_limit,
@@ -113,17 +160,17 @@ impl SnipTask {
 }
 
 #[derive(Debug)]
-pub(crate) struct TaskResult {
-    pub(crate) id: Uuid,
-    pub(crate) local_image: String,
-    pub(crate) original_image: String,
-    pub(crate) rendered_image: String,
-    pub(crate) text: String,
-    pub(crate) latex: Option<String>,
-    pub(crate) typst: String,
-    pub(crate) title: String,
-    pub(crate) snip_count: u64,
-    pub(crate) snip_limit: u64,
+pub struct TaskResult {
+    pub id: Uuid,
+    pub local_image: String,
+    pub original_image: String,
+    pub rendered_image: String,
+    pub text: String,
+    pub latex: Option<String>,
+    pub typst: String,
+    pub title: String,
+    pub snip_count: u64,
+    pub snip_limit: u64,
 }
 
 // The following is the struct for the Mathpix API response

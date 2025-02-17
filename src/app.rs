@@ -13,24 +13,25 @@ use std::time::Duration;
 use tex2typst_rs::text_and_tex2typst;
 use uuid::Uuid;
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct TypstScanData {
-    mathpix_api_key: String,
+    pub mathpix_api_key: String,
     snip_items: Vec<SnipItem>,
-    replace_rules: Vec<ReplaceRule>,
+    pub replace_rules: Vec<ReplaceRule>,
     main_view: MainView,
     selected_snip_item: Option<Uuid>,
     api_used: u64,
     api_limit: u64,
-    hide_when_capturing: bool,
+    pub hide_when_capturing: bool,
     shortcut: Shortcut,
     hotkey: Hotkey,
-    clipboard_mode: ClipboardMode,
+    pub clipboard_mode: ClipboardMode,
     continuous_clipboard: String,
     replace_rules_json: String,
-    bring_forward: bool,
-    target_window_title: String
+    pub bring_forward: bool,
+    pub target_window_title: String,
+    pub target_process_name: String,
 }
 
 impl Default for TypstScanData {
@@ -60,6 +61,7 @@ impl Default for TypstScanData {
             replace_rules_json: String::new(),
             bring_forward: false,
             target_window_title: String::new(),
+            target_process_name: String::new(),
         }
     }
 }
@@ -68,7 +70,7 @@ pub struct TypstScan {
     data: TypstScanData,
     task_sender: Sender<SnipTask>,
     result_receiver: Receiver<TaskResult>,
-    global_api_key: Arc<Mutex<String>>,
+    global_app_data: Arc<Mutex<TypstScanData>>,
     hotkey_hook: Hook,
     toasts: Toasts,
 }
@@ -78,7 +80,7 @@ impl TypstScan {
         cc: &eframe::CreationContext<'_>,
         task_sender: Sender<SnipTask>,
         result_receiver: Receiver<TaskResult>,
-        global_api_key: Arc<Mutex<String>>,
+        global_app_data: Arc<Mutex<TypstScanData>>,
     ) -> Self {
         // add font
         let mut fonts = egui::FontDefinitions::default();
@@ -105,7 +107,7 @@ impl TypstScan {
             TypstScanData::default()
         };
 
-        *global_api_key.lock().unwrap() = typst_scan_data.mathpix_api_key.clone();
+        global_app_data.lock().unwrap().mathpix_api_key = typst_scan_data.mathpix_api_key.clone();
 
         // Create a new hotkey hook
         let hook = Hook::new().expect("Failed to create hotkey hook");
@@ -123,7 +125,7 @@ impl TypstScan {
             data: typst_scan_data,
             task_sender,
             result_receiver,
-            global_api_key,
+            global_app_data,
             hotkey_hook: hook,
             toasts: Toasts::default(),
         }
@@ -139,7 +141,7 @@ enum MainView {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
-enum ClipboardMode {
+pub enum ClipboardMode {
     Continuous,
     CopyTeX,
     CopyTypst,
@@ -304,11 +306,6 @@ impl App for TypstScan {
                         .show(ui, |ui| {
                             ui.label("Mathpix API Key");
                             ui.add(egui::TextEdit::singleline(&mut self.data.mathpix_api_key).password(true));
-                            if let Ok(mut global_api_key) = self.global_api_key.lock() {
-                                if *global_api_key != self.data.mathpix_api_key {
-                                    *global_api_key = self.data.mathpix_api_key.clone();
-                                }
-                            }
                             ui.end_row();
 
                             ui.label("Global Hotkey");
@@ -343,6 +340,7 @@ impl App for TypstScan {
                                             task_sender_clone.send(SnipTask::new()).unwrap();
                                         })
                                         .expect("Failed to register hotkey");
+                                    self.toasts.success("Registered hotkey").duration(Some(Duration::from_secs(5)));
                                 }
                             });
                             ui.end_row();
@@ -359,9 +357,15 @@ impl App for TypstScan {
                             ui.end_row();
 
                             ui.checkbox(&mut self.data.bring_forward, "Bring Forward Window");
-                            ui.horizontal(|ui| {
-                                ui.label("Window Title:");
-                                ui.text_edit_singleline(&mut self.data.target_window_title);
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Process name:");
+                                    ui.text_edit_singleline(&mut self.data.target_process_name);
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Window Title:");
+                                    ui.text_edit_singleline(&mut self.data.target_window_title);
+                                });
                             });
                         });
                 });
@@ -375,12 +379,7 @@ impl App for TypstScan {
                     self.data.continuous_clipboard.push_str(&result.typst);
                     self.data.continuous_clipboard.push_str("\n");
                 }
-                ClipboardMode::CopyTeX => {
-                    ctx.copy_text(result.text.clone());
-                }
-                ClipboardMode::CopyTypst => {
-                    ctx.copy_text(result.typst.clone());
-                }
+                _ => {}
             }
 
             let mut typst_replaced = result.typst.clone();
@@ -403,6 +402,10 @@ impl App for TypstScan {
         }
 
         self.toasts.show(ctx);
+
+        if let Ok(mut global_app_data) = self.global_app_data.lock() {
+            *global_app_data = self.data.clone();
+        }
     }
 
     /// Called by the framework to save state before shutdown.
@@ -411,8 +414,8 @@ impl App for TypstScan {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-struct SnipItem {
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+pub struct SnipItem {
     id: Uuid,
     title: String,
     local_image: String,
@@ -422,8 +425,8 @@ struct SnipItem {
     typst: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-struct ReplaceRule {
-    pattern: String,
-    replacement: String,
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+pub struct ReplaceRule {
+    pub pattern: String,
+    pub replacement: String,
 }
