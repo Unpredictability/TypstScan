@@ -3,6 +3,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 mod app;
 mod worker;
+mod tests;
 
 use app::TypstScan;
 

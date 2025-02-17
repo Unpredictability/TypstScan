@@ -29,6 +29,8 @@ pub struct TypstScanData {
     clipboard_mode: ClipboardMode,
     continuous_clipboard: String,
     replace_rules_json: String,
+    bring_forward: bool,
+    target_window_title: String
 }
 
 impl Default for TypstScanData {
@@ -56,6 +58,8 @@ impl Default for TypstScanData {
             clipboard_mode: ClipboardMode::CopyTypst,
             continuous_clipboard: String::new(),
             replace_rules_json: String::new(),
+            bring_forward: false,
+            target_window_title: String::new(),
         }
     }
 }
@@ -353,6 +357,12 @@ impl App for TypstScan {
                             ui.label("API usage");
                             ui.add(egui::ProgressBar::new(self.data.api_used as f32 / self.data.api_limit as f32).show_percentage());
                             ui.end_row();
+
+                            ui.checkbox(&mut self.data.bring_forward, "Bring Forward Window");
+                            ui.horizontal(|ui| {
+                                ui.label("Window Title:");
+                                ui.text_edit_singleline(&mut self.data.target_window_title);
+                            });
                         });
                 });
             }
